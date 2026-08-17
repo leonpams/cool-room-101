@@ -1,37 +1,58 @@
-# Cool Room 101 — Room Temperature Monitor (Dual: ThingSpeak + Supabase)
+# Cool Room 101 — Cold Room Monitor (ThingSpeak + Supabase + Email)
 
-ESP32 + SHT30 -> kirim ke ThingSpeak (MQTT) DAN Supabase (HTTPS) sekaligus, keduanya
-tiap 15 detik -> Buzzer & Email (alert ke tim) -> Dashboard (Vercel, baca dari ThingSpeak)
+ESP32 + SHT30 -> kirim ke ThingSpeak (MQTT) DAN Supabase (HTTPS) sekaligus, tiap 15 detik
+-> Buzzer & Email (alert ke tim, edge-triggered) -> Dashboard (Vercel, dua grafik terpisah + interaktif)
+
+## Range operasi
+Didesain untuk **cold room 21–25°C**:
+- **Normal**: di bawah 23°C
+- **Waspada**: 23–25°C
+- **Alert**: di atas 25°C — buzzer nyala, email terkirim, dashboard update instan
+
+Kalau range ruangan Anda beda, ubah `T_WARN`/`T_DANGER` di `dashboard/index.html` dan
+`TEMP_ON`/`TEMP_OFF` di `esp32_final_stack.ino` — pastikan dua-duanya tetap sinkron.
 
 ## Urutan setup
 
 ### 1. ThingSpeak
 Channel ID, MQTT credentials, Write API Key, dan Read API Key semua sudah terisi di kode.
-Tidak ada yang perlu diambil lagi dari sisi ThingSpeak.
 
 ### 2. Supabase (jalur kedua, paralel)
-1. Kalau belum pernah, buka Supabase SQL Editor, jalankan isi `supabase_schema.sql`
-   (aman dijalankan ulang — pakai `if not exists`, tidak akan error kalau tabel sudah ada)
-2. URL dan anon key sudah terisi di kode ESP32
+Kalau tabel `readings` belum pernah dibuat, jalankan `supabase_schema.sql` sekali di SQL Editor
+(aman dijalankan ulang, pakai `if not exists`).
 
 ### 3. ESP32
 1. **Extract dulu (Extract All)** zip ini ke folder biasa sebelum dibuka
-2. Install library **"PubSubClient"** dan **"ESP Mail Client" by Mobizt** lewat Library Manager
+2. Install library **"PubSubClient"** dan **"ESP Mail Client" by Mobizt**
 3. Buka folder `esp32_final_stack/`, klik `esp32_final_stack.ino` — semua kredensial sudah terisi
-4. Upload ke ESP32, buka Serial Monitor (115200) — akan muncul dua baris konfirmasi kirim
-   tiap 15 detik: `[MQTT] Tersimpan` dan `[SUPABASE] Tersimpan`
+4. Upload, buka Serial Monitor (115200)
 
 ### 4. Dashboard
-Sudah terisi lengkap (Channel ID + Read API Key ThingSpeak). Upload folder `dashboard/`
-ke GitHub → import ke Vercel → Deploy, atau drag ke vercel.com/drop.
+Sudah terisi lengkap. Upload folder `dashboard/` ke GitHub (Vercel auto-deploy), atau drag ke vercel.com/drop.
 
-## Kecepatan data
-Semua jalur dibuat sama: **15 detik** — ini batas tercepat paket gratis ThingSpeak
-(1 pesan/15 detik), jadi Supabase disamakan biar konsisten meskipun Supabase sendiri
-sebenarnya tidak punya limit seketat itu. Dashboard membaca dari ThingSpeak tiap 5 detik
-(baca boleh lebih sering dari kirim, tidak kena limit yang sama).
+## Cara kerja alert (edge-triggered, anti-spam)
+Email TIDAK dikirim berdasarkan waktu — hanya saat status BERUBAH:
+- Suhu naik lewat 25°C (Normal → Alert): 1 email terkirim
+- Suhu masih di atas 25°C terus-menerus: tidak ada email tambahan
+- Suhu turun ke bawah 24.3°C (Alert → Normal): 1 email "sudah normal" terkirim
 
-## Cara kerja alert
-- Buzzer nyala di suhu >= 33.0°C, mati di <= 32.3°C (hysteresis, anti-flapping)
-- Email HANYA terkirim saat status berubah (naik ke alert, atau turun lagi ke normal)
-- Data tetap terkirim ke ThingSpeak DAN Supabase tiap 15 detik terlepas dari status alert
+Hysteresis (25.0 naik / 24.3 turun, bukan angka yang sama) mencegah bolak-balik kirim kalau
+suhu "goyang" persis di titik ambang.
+
+**Sinkronisasi instan**: begitu status berubah, ESP32 langsung kirim data ke ThingSpeak +
+Supabase saat itu juga (tidak nunggu siklus 15 detik) — supaya titik data yang memicu alert
+selalu tercatat di dashboard, bukan cuma di email.
+
+## Fitur Dashboard
+- **Dua grafik terpisah** (Suhu & Kelembaban) dengan skala masing-masing — hover titik mana pun
+  untuk lihat nilai presisi + jam persis
+- **Lampu status** hijau/kuning/merah di kartu Status Ruangan
+- **Riwayat**: tombol "Tampilkan Lebih Banyak" (buka data lebih lama), "Segarkan Tampilan"
+  (reset ke tampilan awal), "Unduh CSV" (ekspor langsung dari ThingSpeak)
+- Hapus data permanen **sengaja tidak disediakan di dashboard** (demi keamanan) — lakukan
+  langsung di ThingSpeak: Channel Settings → Clear Channel
+
+## Catatan keamanan
+Anon key Supabase & Read Key ThingSpeak yang ada di kode dashboard memang didesain untuk
+publik — batas keamanannya ada di Row Level Security (Supabase) dan sifat read-only key
+(ThingSpeak), bukan di menyembunyikan angkanya.
