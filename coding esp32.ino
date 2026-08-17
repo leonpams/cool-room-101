@@ -2,16 +2,25 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <ESP_Mail_Client.h>
+#include <PubSubClient.h>
 
 // ── WiFi ─────────────────────────────────────────────────────
 const char* WIFI_SSID     = "Minimal Mandi";
 const char* WIFI_PASSWORD = "112233445566";
 
-// ── Supabase ─────────────────────────────────────────────────
+const char* MQTT_SERVER   = "mqtt3.thingspeak.com";
+const int   MQTT_PORT     = 1883;
+const char* MQTT_CLIENT   = "LDEYKCQ0NAUgCyEzLBIgCjk";
+const char* MQTT_USERNAME = "LDEYKCQ0NAUgCyEzLBIgCjk";
+const char* MQTT_PASSWORD = "UUA6LtZ/CpaD21nK3q4ueyDh";
+const long  CHANNEL_ID    = 3448569;
+const char* WRITE_API_KEY = "2T2O2DG8HPP74BVK";
+
+// ── Supabase (kirim kedua, paralel dengan ThingSpeak) ────────
 const char* SUPABASE_URL      = "https://vfpjclrtmtzoajsxeefe.supabase.co";
 const char* SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZmcGpjbHJ0bXR6b2Fqc3hlZWZlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY4OTQwNzAsImV4cCI6MjEwMjQ3MDA3MH0.19kW_emlzbCGmt0MIiEKvAsVPytB6WmfJahYSUCSTGg";
 
+// ── Gmail (pengirim) ─────────────────────────────────────────
 #define SMTP_HOST      "smtp.gmail.com"
 #define SMTP_PORT      465
 const char* SENDER_EMAIL    = "lunoxzd@gmail.com";
@@ -19,11 +28,10 @@ const char* SENDER_APP_PASS = "rmprpgmouqjsjxix";
 
 // ── Penerima notifikasi (bisa lebih dari satu) ───────────────
 const char* RECIPIENTS[] = {
-  "leonhadi757@email.com",
-  "leonpam757@gmail.com",
-  "leonpamungkashadi757@gmail.com"
+  "leonhadi757@gmail.com",
+  "leonpam757@gmail.com"
 };
-const int RECIPIENT_COUNT = 3;
+const int RECIPIENT_COUNT = 2; 
 
 // ── Pin ──────────────────────────────────────────────────────
 #define SDA_PIN        21
@@ -34,23 +42,25 @@ const int RECIPIENT_COUNT = 3;
 #define SHT30_ADDR     0x44
 
 // ── Threshold dengan hysteresis ──────────────────────────────
-#define TEMP_ON        33.0
-#define TEMP_OFF       32.3
+#define TEMP_ON        26.0
+#define TEMP_OFF       25.3
 
 // ── Interval ─────────────────────────────────────────────────
-#define READ_INTERVAL     3000
-#define SUPABASE_INTERVAL 20000
+#define READ_INTERVAL      1000    // baca sensor tiap 1 detik — supaya Supabase dapat data genuinely baru
+#define MQTT_INTERVAL      15000   // 15 detik = batas TERCEPAT paket gratis ThingSpeak, TIDAK BISA lebih cepat
+#define SUPABASE_INTERVAL  1000    // 1 detik — Supabase tidak punya batas rate seperti ThingSpeak
 
-// ── Auto-kalibrasi ───────────────────────────────────────────
 #define CALIB_SAMPLES  10
 float tempOffset = 0.0;
 float humiOffset = 0.0;
 
-unsigned long lastReadTime     = 0;
+unsigned long lastReadTime = 0;
+unsigned long lastMqttTime = 0;
 unsigned long lastSupabaseTime = 0;
 bool buzzerActive = false;
 
-SMTPSession smtp;
+WiFiClient   wifiClient;
+PubSubClient mqtt(wifiClient);
 
 // ============================================================
 //  I2C / SHT30
@@ -97,6 +107,9 @@ bool sht30Read(float &temp, float &humi) {
   return true;
 }
 
+// ============================================================
+//  AUTO-KALIBRASI
+// ============================================================
 void autoCalibrate() {
   Serial.println("[CALIB] Memulai auto-kalibrasi...");
   float sumT = 0, sumH = 0;
@@ -145,7 +158,50 @@ void connectWiFi() {
 }
 
 // ============================================================
-//  SUPABASE — simpan data untuk histori & dashboard
+//  THINGSPEAK MQTT — simpan data untuk histori & dashboard
+// ============================================================
+void connectMQTT() {
+  if (mqtt.connected()) return;
+
+  Serial.print("[MQTT] Konek ke ThingSpeak...");
+  int attempt = 0;
+  while (!mqtt.connected() && attempt < 5) {
+    if (mqtt.connect(MQTT_CLIENT, MQTT_USERNAME, MQTT_PASSWORD)) {
+      Serial.println(" Terhubung ✓");
+    } else {
+      Serial.print(" Gagal (state=" + String(mqtt.state()) + "). Coba ulang...");
+      delay(3000);
+      attempt++;
+    }
+  }
+}
+
+void publishToThingSpeak(float temp, float humi) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[MQTT] WiFi tidak terhubung, skip.");
+    return;
+  }
+
+  connectMQTT();
+  if (!mqtt.connected()) return;
+
+  char topic[60];
+  snprintf(topic, sizeof(topic), "channels/%ld/publish", CHANNEL_ID);
+
+  char payload[80];
+  snprintf(payload, sizeof(payload),
+           "field1=%.2f&field2=%.1f&status=MQTTPUBLISH", temp, humi);
+
+  bool ok = mqtt.publish(topic, payload);
+  if (ok) {
+    Serial.println("[MQTT] Tersimpan ✓  " + String(temp,2) + "C, " + String(humi,1) + "%");
+  } else {
+    Serial.println("[MQTT] Gagal publish. State: " + String(mqtt.state()));
+  }
+}
+
+// ============================================================
+//  SUPABASE — simpan data paralel dengan ThingSpeak
 // ============================================================
 void sendToSupabase(float temp, float humi) {
   if (WiFi.status() != WL_CONNECTED) {
@@ -179,9 +235,49 @@ void sendToSupabase(float temp, float humi) {
 
 // ============================================================
 //  EMAIL (Gmail) — kirim HANYA saat status berubah, ke semua penerima
+//  Ditulis manual pakai WiFiClientSecure (SMTP mentah), TANPA library
+//  tambahan — supaya tidak ada risiko bentrok versi seperti ESP_Mail_Client.
 // ============================================================
-void smtpCallback(SMTP_Status status) {
-  Serial.println("[EMAIL] " + status.info());
+
+// Base64 encode sederhana — dibutuhkan buat proses AUTH LOGIN SMTP
+String base64Encode(const String &input) {
+  static const char* chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  String out;
+  int len = input.length();
+  const uint8_t* data = (const uint8_t*)input.c_str();
+  int i = 0;
+  while (i < len) {
+    uint32_t a = i < len ? data[i++] : 0;
+    uint32_t b = i < len ? data[i++] : 0;
+    uint32_t c = i < len ? data[i++] : 0;
+    uint32_t triple = (a << 16) + (b << 8) + c;
+    out += chars[(triple >> 18) & 0x3F];
+    out += chars[(triple >> 12) & 0x3F];
+    out += chars[(triple >> 6) & 0x3F];
+    out += chars[triple & 0x3F];
+  }
+  int mod = len % 3;
+  if (mod == 1) { out.setCharAt(out.length()-1,'='); out.setCharAt(out.length()-2,'='); }
+  else if (mod == 2) { out.setCharAt(out.length()-1,'='); }
+  return out;
+}
+
+WiFiClientSecure smtpClient;
+
+// Baca satu balasan server SMTP (support multi-baris seperti balasan EHLO)
+int smtpReadResponse() {
+  String line;
+  int code = 0;
+  bool more = true;
+  unsigned long start = millis();
+  while (more && millis() - start < 8000) {
+    if (!smtpClient.available()) { delay(20); continue; }
+    line = smtpClient.readStringUntil('\n');
+    if (line.length() < 3) continue;
+    code = line.substring(0,3).toInt();
+    more = (line.length() >= 4 && line.charAt(3) == '-');  // "250-" = masih lanjut, "250 " = selesai
+  }
+  return code;
 }
 
 void sendEmailAlert(const String &subject, const String &body) {
@@ -190,49 +286,72 @@ void sendEmailAlert(const String &subject, const String &body) {
     return;
   }
 
-  Session_Config config;
-  config.server.host_name = SMTP_HOST;
-  config.server.port = SMTP_PORT;
-  config.login.email = SENDER_EMAIL;
-  config.login.password = SENDER_APP_PASS;
-  config.login.user_domain = "";
-  config.time.ntp_server = "pool.ntp.org,time.nist.gov";
-  config.time.gmt_offset = 7;
-  config.time.day_light_offset = 0;
+  smtpClient.setInsecure();  // sama seperti koneksi Supabase — tanpa verifikasi sertifikat, cukup untuk hobby project
+  Serial.println("[EMAIL] Menghubungkan ke smtp.gmail.com...");
 
-  SMTP_Message message;
-  message.sender.name = "Sensor Suhu Ruangan";
-  message.sender.email = SENDER_EMAIL;
-  message.subject = subject;
-
-  for (int i = 0; i < RECIPIENT_COUNT; i++) {
-    message.addRecipient("", RECIPIENTS[i]);
-  }
-
-  message.text.content = body.c_str();
-  message.text.charSet = "utf-8";
-  message.text.transfer_encoding = Content_Transfer_Encoding::enc_7bit;
-
-  smtp.callback(smtpCallback);
-
-  if (!smtp.connect(&config)) {
+  if (!smtpClient.connect(SMTP_HOST, SMTP_PORT)) {
     Serial.println("[EMAIL] Gagal konek ke server SMTP.");
     return;
   }
+  smtpClient.setTimeout(8000);
 
-  if (!MailClient.sendMail(&smtp, &message)) {
-    Serial.println("[EMAIL] Gagal kirim: " + smtp.errorReason());
-  } else {
-    Serial.println("[EMAIL] Notifikasi terkirim ke " + String(RECIPIENT_COUNT) + " orang ✓");
+  smtpReadResponse();  // baca greeting 220
+
+  smtpClient.print("EHLO esp32client\r\n");
+  smtpReadResponse();
+
+  smtpClient.print("AUTH LOGIN\r\n");
+  smtpReadResponse();  // 334 Username:
+
+  smtpClient.print(base64Encode(SENDER_EMAIL) + "\r\n");
+  smtpReadResponse();  // 334 Password:
+
+  smtpClient.print(base64Encode(SENDER_APP_PASS) + "\r\n");
+  int authCode = smtpReadResponse();  // 235 = sukses login
+
+  if (authCode != 235) {
+    Serial.println("[EMAIL] Login gagal (code " + String(authCode) + "). Cek App Password.");
+    smtpClient.stop();
+    return;
   }
 
-  smtp.closeSession();
+  smtpClient.print("MAIL FROM:<" + String(SENDER_EMAIL) + ">\r\n");
+  smtpReadResponse();
+
+  for (int i = 0; i < RECIPIENT_COUNT; i++) {
+    smtpClient.print("RCPT TO:<" + String(RECIPIENTS[i]) + ">\r\n");
+    smtpReadResponse();
+  }
+
+  smtpClient.print("DATA\r\n");
+  smtpReadResponse();  // 354 = siap terima isi pesan
+
+  String msg;
+  msg += "From: Sensor Suhu Ruangan <" + String(SENDER_EMAIL) + ">\r\n";
+  msg += "To: " + String(RECIPIENTS[0]) + "\r\n";
+  msg += "Subject: " + subject + "\r\n";
+  msg += "Content-Type: text/plain; charset=utf-8\r\n";
+  msg += "\r\n";
+  msg += body + "\r\n";
+  msg += ".\r\n";  // titik sendirian di baris baru = tanda akhir pesan SMTP
+
+  smtpClient.print(msg);
+  int sendCode = smtpReadResponse();  // 250 = pesan diterima server
+
+  smtpClient.print("QUIT\r\n");
+  smtpClient.stop();
+
+  if (sendCode == 250) {
+    Serial.println("[EMAIL] Notifikasi terkirim ke " + String(RECIPIENT_COUNT) + " orang ✓");
+  } else {
+    Serial.println("[EMAIL] Gagal kirim. Code terakhir: " + String(sendCode));
+  }
 }
 
 // ============================================================
 //  BUZZER + NOTIFIKASI — hysteresis, edge-triggered
 // ============================================================
-void handleBuzzer(float temp) {
+void handleBuzzer(float temp, float humi) {
   if (!buzzerActive && temp >= TEMP_ON) {
     digitalWrite(BUZZER_PIN, HIGH);
     buzzerActive = true;
@@ -242,9 +361,16 @@ void handleBuzzer(float temp) {
       "[ALERT] Suhu Ruangan Tinggi",
       "Suhu ruangan saat ini: " + String(temp, 1) + " C\n"
       "Batas alert: " + String(TEMP_ON, 1) + " C\n"
-      "Buzzer aktif di lokasi. Mohon dicek.\n\n"
-      "Dashboard: (isi link dashboard Vercel Anda di sini)"
+      "Buzzer aktif di lokasi. Mohon dicek."
     );
+
+    // Kirim ke ThingSpeak SEKARANG juga (bukan nunggu siklus 15 detik) supaya
+    // titik data yang memicu alert ini pasti "kefoto" di dashboard.
+    // Supabase TIDAK perlu ini lagi — dia sudah kirim tiap 1 detik,
+    // jadi momen alert otomatis kecatat dalam waktu maksimal 1 detik.
+    Serial.println("[SYNC] Kirim ke ThingSpeak instan — momen alert dimulai");
+    publishToThingSpeak(temp, humi);
+    lastMqttTime = millis();
   }
   else if (buzzerActive && temp <= TEMP_OFF) {
     digitalWrite(BUZZER_PIN, LOW);
@@ -256,6 +382,10 @@ void handleBuzzer(float temp) {
       "Suhu ruangan saat ini: " + String(temp, 1) + " C\n"
       "Kondisi sudah kembali normal."
     );
+
+    Serial.println("[SYNC] Kirim ke ThingSpeak instan — momen kembali normal");
+    publishToThingSpeak(temp, humi);
+    lastMqttTime = millis();
   }
 }
 
@@ -266,8 +396,7 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
-  Serial.println("\n=== ESP32 SHT30 — Stack Final (Kantor) ===");
-  Serial.println("Supabase (histori) + Buzzer (lokal) + Email (alert grup)");
+  Serial.println("\n=== ESP32 SHT30 — Stack Final (ThingSpeak + Email) ===");
 
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
@@ -290,6 +419,10 @@ void setup() {
   autoCalibrate();
   connectWiFi();
 
+  mqtt.setServer(MQTT_SERVER, MQTT_PORT);
+  mqtt.setKeepAlive(60);
+  connectMQTT();
+
   Serial.println("[CFG]  Nyala buzzer >= " + String(TEMP_ON, 1) + " C");
   Serial.println("[CFG]  Mati buzzer  <= " + String(TEMP_OFF, 1) + " C");
   Serial.println("[CFG]  Penerima email: " + String(RECIPIENT_COUNT) + " orang");
@@ -305,6 +438,8 @@ void setup() {
 //  LOOP
 // ============================================================
 void loop() {
+  mqtt.loop();
+
   unsigned long now = millis();
 
   if (now - lastReadTime >= READ_INTERVAL) {
@@ -325,7 +460,12 @@ void loop() {
     Serial.print(humi, 1);
     Serial.println(buzzerActive ? " %  |  ALERT" : " %  |  NORMAL");
 
-    handleBuzzer(temp);
+    handleBuzzer(temp, humi);
+
+    if (now - lastMqttTime >= MQTT_INTERVAL) {
+      lastMqttTime = now;
+      publishToThingSpeak(temp, humi);
+    }
 
     if (now - lastSupabaseTime >= SUPABASE_INTERVAL) {
       lastSupabaseTime = now;
