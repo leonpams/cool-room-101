@@ -2,21 +2,13 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <PubSubClient.h>
 #include <ESP_Mail_Client.h>
 
 // ── WiFi ─────────────────────────────────────────────────────
 const char* WIFI_SSID     = "Minimal Mandi";
 const char* WIFI_PASSWORD = "112233445566";
 
-const char* MQTT_SERVER   = "mqtt3.thingspeak.com";
-const int   MQTT_PORT     = 1883;
-const char* MQTT_CLIENT   = "LDEYKCQ0NAUgCyEzLBIgCjk";
-const char* MQTT_USERNAME = "LDEYKCQ0NAUgCyEzLBIgCjk";
-const char* MQTT_PASSWORD = "UUA6LtZ/CpaD21nK3q4ueyDh";
-const long  CHANNEL_ID    = 3448569;
-const char* WRITE_API_KEY = "2T2O2DG8HPP74BVK";
-
+// ── Supabase ─────────────────────────────────────────────────
 const char* SUPABASE_URL      = "https://vfpjclrtmtzoajsxeefe.supabase.co";
 const char* SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZmcGpjbHJ0bXR6b2Fqc3hlZWZlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY4OTQwNzAsImV4cCI6MjEwMjQ3MDA3MH0.19kW_emlzbCGmt0MIiEKvAsVPytB6WmfJahYSUCSTGg";
 
@@ -28,9 +20,10 @@ const char* SENDER_APP_PASS = "rmprpgmouqjsjxix";
 // ── Penerima notifikasi (bisa lebih dari satu) ───────────────
 const char* RECIPIENTS[] = {
   "leonhadi757@email.com",
-  "leonpam757@email.com"
+  "leonpam757@gmail.com",
+  "leonpamungkashadi757@gmail.com"
 };
-const int RECIPIENT_COUNT = 2;   // WAJIB sama dengan jumlah baris di atas
+const int RECIPIENT_COUNT = 3;
 
 // ── Pin ──────────────────────────────────────────────────────
 #define SDA_PIN        21
@@ -46,21 +39,18 @@ const int RECIPIENT_COUNT = 2;   // WAJIB sama dengan jumlah baris di atas
 
 // ── Interval ─────────────────────────────────────────────────
 #define READ_INTERVAL     3000
-#define MQTT_INTERVAL      15000   // 15 detik = batas TERCEPAT paket gratis ThingSpeak
-#define SUPABASE_INTERVAL  15000   // 15 detik juga, disamakan dengan ThingSpeak
+#define SUPABASE_INTERVAL 20000
 
+// ── Auto-kalibrasi ───────────────────────────────────────────
 #define CALIB_SAMPLES  10
 float tempOffset = 0.0;
 float humiOffset = 0.0;
 
-unsigned long lastReadTime = 0;
-unsigned long lastMqttTime = 0;
+unsigned long lastReadTime     = 0;
 unsigned long lastSupabaseTime = 0;
 bool buzzerActive = false;
 
-WiFiClient   wifiClient;
-PubSubClient mqtt(wifiClient);
-SMTPSession  smtp;
+SMTPSession smtp;
 
 // ============================================================
 //  I2C / SHT30
@@ -107,9 +97,6 @@ bool sht30Read(float &temp, float &humi) {
   return true;
 }
 
-// ============================================================
-//  AUTO-KALIBRASI
-// ============================================================
 void autoCalibrate() {
   Serial.println("[CALIB] Memulai auto-kalibrasi...");
   float sumT = 0, sumH = 0;
@@ -158,50 +145,7 @@ void connectWiFi() {
 }
 
 // ============================================================
-//  THINGSPEAK MQTT — simpan data untuk histori & dashboard
-// ============================================================
-void connectMQTT() {
-  if (mqtt.connected()) return;
-
-  Serial.print("[MQTT] Konek ke ThingSpeak...");
-  int attempt = 0;
-  while (!mqtt.connected() && attempt < 5) {
-    if (mqtt.connect(MQTT_CLIENT, MQTT_USERNAME, MQTT_PASSWORD)) {
-      Serial.println(" Terhubung ✓");
-    } else {
-      Serial.print(" Gagal (state=" + String(mqtt.state()) + "). Coba ulang...");
-      delay(3000);
-      attempt++;
-    }
-  }
-}
-
-void publishToThingSpeak(float temp, float humi) {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[MQTT] WiFi tidak terhubung, skip.");
-    return;
-  }
-
-  connectMQTT();
-  if (!mqtt.connected()) return;
-
-  char topic[60];
-  snprintf(topic, sizeof(topic), "channels/%ld/publish", CHANNEL_ID);
-
-  char payload[80];
-  snprintf(payload, sizeof(payload),
-           "field1=%.2f&field2=%.1f&status=MQTTPUBLISH", temp, humi);
-
-  bool ok = mqtt.publish(topic, payload);
-  if (ok) {
-    Serial.println("[MQTT] Tersimpan ✓  " + String(temp,2) + "C, " + String(humi,1) + "%");
-  } else {
-    Serial.println("[MQTT] Gagal publish. State: " + String(mqtt.state()));
-  }
-}
-
-// ============================================================
-//  SUPABASE — simpan data paralel dengan ThingSpeak
+//  SUPABASE — simpan data untuk histori & dashboard
 // ============================================================
 void sendToSupabase(float temp, float humi) {
   if (WiFi.status() != WL_CONNECTED) {
@@ -237,7 +181,7 @@ void sendToSupabase(float temp, float humi) {
 //  EMAIL (Gmail) — kirim HANYA saat status berubah, ke semua penerima
 // ============================================================
 void smtpCallback(SMTP_Status status) {
-  Serial.println("[EMAIL] " + String(status.info()));
+  Serial.println("[EMAIL] " + status.info());
 }
 
 void sendEmailAlert(const String &subject, const String &body) {
@@ -277,7 +221,7 @@ void sendEmailAlert(const String &subject, const String &body) {
   }
 
   if (!MailClient.sendMail(&smtp, &message)) {
-    Serial.println("[EMAIL] Gagal kirim: " + String(smtp.errorReason()));
+    Serial.println("[EMAIL] Gagal kirim: " + smtp.errorReason());
   } else {
     Serial.println("[EMAIL] Notifikasi terkirim ke " + String(RECIPIENT_COUNT) + " orang ✓");
   }
@@ -298,7 +242,8 @@ void handleBuzzer(float temp) {
       "[ALERT] Suhu Ruangan Tinggi",
       "Suhu ruangan saat ini: " + String(temp, 1) + " C\n"
       "Batas alert: " + String(TEMP_ON, 1) + " C\n"
-      "Buzzer aktif di lokasi. Mohon dicek."
+      "Buzzer aktif di lokasi. Mohon dicek.\n\n"
+      "Dashboard: (isi link dashboard Vercel Anda di sini)"
     );
   }
   else if (buzzerActive && temp <= TEMP_OFF) {
@@ -321,7 +266,8 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
-  Serial.println("\n=== ESP32 SHT30 — Stack Final (ThingSpeak + Email) ===");
+  Serial.println("\n=== ESP32 SHT30 — Stack Final (Kantor) ===");
+  Serial.println("Supabase (histori) + Buzzer (lokal) + Email (alert grup)");
 
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
@@ -344,10 +290,6 @@ void setup() {
   autoCalibrate();
   connectWiFi();
 
-  mqtt.setServer(MQTT_SERVER, MQTT_PORT);
-  mqtt.setKeepAlive(60);
-  connectMQTT();
-
   Serial.println("[CFG]  Nyala buzzer >= " + String(TEMP_ON, 1) + " C");
   Serial.println("[CFG]  Mati buzzer  <= " + String(TEMP_OFF, 1) + " C");
   Serial.println("[CFG]  Penerima email: " + String(RECIPIENT_COUNT) + " orang");
@@ -363,8 +305,6 @@ void setup() {
 //  LOOP
 // ============================================================
 void loop() {
-  mqtt.loop();
-
   unsigned long now = millis();
 
   if (now - lastReadTime >= READ_INTERVAL) {
@@ -386,11 +326,6 @@ void loop() {
     Serial.println(buzzerActive ? " %  |  ALERT" : " %  |  NORMAL");
 
     handleBuzzer(temp);
-
-    if (now - lastMqttTime >= MQTT_INTERVAL) {
-      lastMqttTime = now;
-      publishToThingSpeak(temp, humi);
-    }
 
     if (now - lastSupabaseTime >= SUPABASE_INTERVAL) {
       lastSupabaseTime = now;
