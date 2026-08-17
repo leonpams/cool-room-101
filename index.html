@@ -191,6 +191,17 @@ main{padding:32px 0 60px}
 .metric-value{
   font-weight:800;font-size:30px;letter-spacing:-.6px;margin-bottom:8px;
 }
+.status-light-row{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.status-light{
+  width:16px;height:16px;border-radius:50%;flex-shrink:0;
+  background:#9CA3AF;
+  box-shadow:0 0 0 4px rgba(0,0,0,.04);
+  transition:background .4s, box-shadow .4s;
+}
+.status-light.normal{background:#1CB854;box-shadow:0 0 0 5px rgba(28,184,84,.18)}
+.status-light.warn{background:#F0A500;box-shadow:0 0 0 5px rgba(240,165,0,.18)}
+.status-light.danger{background:#E0263C;box-shadow:0 0 0 5px rgba(224,38,60,.2);animation:lightPulse 1.1s ease-in-out infinite}
+@keyframes lightPulse{0%,100%{box-shadow:0 0 0 5px rgba(224,38,60,.2)}50%{box-shadow:0 0 0 9px rgba(224,38,60,.08)}}
 .metric-desc{font-size:13px;color:var(--ink-soft);font-weight:500;line-height:1.5}
 .metric-icon-corner{
   position:absolute;top:22px;right:22px;
@@ -247,13 +258,54 @@ main{padding:32px 0 60px}
 .panel-legend{display:flex;gap:16px}
 .legend-item{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--ink-soft)}
 .legend-swatch{width:14px;height:3px;border-radius:2px}
-.chart-area{width:100%;height:200px;margin-top:16px}
-.chart-area canvas{width:100%!important;height:100%!important;display:block}
+.chart-area{width:100%;height:200px;margin-top:16px;position:relative}
+.chart-area canvas{width:100%!important;height:100%!important;display:block;cursor:crosshair}
+
+.chart-grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;
+}
+@media(max-width:760px){.chart-grid{grid-template-columns:1fr;gap:0}}
+
+.chart-tooltip{
+  position:absolute;pointer-events:none;
+  background:var(--navy-900);color:#fff;
+  border-radius:10px;padding:8px 12px;
+  font-size:12px;font-weight:600;line-height:1.5;
+  opacity:0;transform:translate(-50%,-100%) translateY(-10px);
+  transition:opacity .12s ease;
+  white-space:nowrap;z-index:5;
+  box-shadow:0 8px 20px -6px rgba(10,31,61,.4);
+}
+.chart-tooltip.show{opacity:1}
+.chart-tooltip .tt-time{color:rgba(255,255,255,.6);font-weight:500;font-size:10.5px}
 
 /* ============================================================
    ACTIVITY LOG
    ============================================================ */
 .activity-list{display:flex;flex-direction:column;margin-top:6px}
+
+.activity-toolbar{
+  display:flex;align-items:center;justify-content:space-between;
+  flex-wrap:wrap;gap:12px;margin-bottom:14px;
+}
+.activity-actions{display:flex;gap:8px;flex-wrap:wrap}
+.action-btn{
+  font-family:var(--font);font-size:12px;font-weight:700;
+  padding:8px 14px;border-radius:10px;border:none;cursor:pointer;
+  background:var(--tint);color:var(--ink-soft);
+  transition:background .2s,color .2s;
+  text-decoration:none;display:inline-flex;align-items:center;
+}
+.action-btn:hover{background:var(--navy-soft);color:var(--navy-700)}
+.action-btn-outline{
+  background:transparent;border:1px solid var(--line);color:var(--ink-soft);
+}
+.action-btn-outline:hover{border-color:var(--navy-700);color:var(--navy-700);background:transparent}
+.activity-note{
+  font-size:11.5px;color:var(--ink-faint);font-weight:500;
+  margin-top:14px;padding-top:14px;border-top:1px solid var(--line);
+  line-height:1.6;
+}
 .activity-row{
   display:grid;grid-template-columns:70px 130px 1fr auto;align-items:center;gap:16px;
   padding:13px 4px;border-bottom:1px solid var(--line);
@@ -312,7 +364,7 @@ footer p{font-size:12px;color:var(--ink-faint);font-weight:600}
     <div class="featured-texture"></div>
     <div class="featured-glow" id="heatGlow"></div>
     <div class="featured-content">
-      <div class="featured-eyebrow">Sistem Pemantauan Lingkungan</div>
+      <div class="featured-eyebrow">Cool Room 101</div>
       <div class="featured-title">Kondisi ruangan dipantau secara langsung dan diperbarui otomatis.</div>
 
       <div class="featured-kpi-row">
@@ -328,7 +380,7 @@ footer p{font-size:12px;color:var(--ink-faint);font-weight:600}
 
       <div class="featured-meta">
         <span id="metaHumidity">Kelembaban —</span>
-        <span>Ambang batas alarm 34°C</span>
+        <span>Ambang batas alarm 25°C</span>
         <span>Channel ThingSpeak 3448569</span>
       </div>
     </div>
@@ -354,7 +406,10 @@ footer p{font-size:12px;color:var(--ink-faint);font-weight:600}
       </div>
       <div class="metric-underline" id="statusUnderline" style="background:var(--navy-700)"></div>
       <div class="metric-label">Status Ruangan</div>
-      <div class="metric-value" id="statusValue" style="font-size:22px">Memuat</div>
+      <div class="status-light-row">
+        <span class="status-light" id="statusLight"></span>
+        <span class="metric-value" id="statusValue" style="font-size:22px">Memuat</span>
+      </div>
       <div class="sparkline-wrap"><canvas id="statusSpark"></canvas></div>
       <div class="metric-desc" id="statusDesc">Menunggu pembacaan sensor.</div>
     </div>
@@ -371,24 +426,53 @@ footer p{font-size:12px;color:var(--ink-faint);font-weight:600}
 
   </div>
 
-  <!-- CHART -->
-  <div class="panel reveal" style="animation-delay:.3s">
-    <div class="panel-head">
-      <div class="panel-title">Tren Suhu dan Kelembaban</div>
-      <div class="panel-legend">
-        <div class="legend-item"><span class="legend-swatch" style="background:var(--red)"></span>Suhu</div>
-        <div class="legend-item"><span class="legend-swatch" style="background:var(--navy-700)"></span>Kelembaban</div>
+  <!-- CHARTS: dipisah supaya skala tiap metrik jelas -->
+  <div class="chart-grid">
+    <div class="panel reveal" style="animation-delay:.3s">
+      <div class="panel-head">
+        <div class="panel-title">Tren Suhu</div>
+        <div class="panel-legend">
+          <div class="legend-item"><span class="legend-swatch" style="background:var(--red)"></span>°C</div>
+        </div>
+      </div>
+      <div class="chart-area" id="tempChartWrap">
+        <canvas id="tempChart"></canvas>
+        <div class="chart-tooltip" id="tempTooltip"></div>
       </div>
     </div>
-    <div class="chart-area"><canvas id="histChart"></canvas></div>
+
+    <div class="panel reveal" style="animation-delay:.34s">
+      <div class="panel-head">
+        <div class="panel-title">Tren Kelembaban</div>
+        <div class="panel-legend">
+          <div class="legend-item"><span class="legend-swatch" style="background:var(--navy-700)"></span>%</div>
+        </div>
+      </div>
+      <div class="chart-area" id="humiChartWrap">
+        <canvas id="humiChart"></canvas>
+        <div class="chart-tooltip" id="humiTooltip"></div>
+      </div>
+    </div>
   </div>
 
   <!-- ACTIVITY -->
   <div class="panel reveal" style="animation-delay:.36s">
-    <div class="panel-title" style="margin-bottom:10px">Riwayat Pembacaan Terbaru</div>
+    <div class="activity-toolbar">
+      <div class="panel-title">Riwayat Pembacaan</div>
+      <div class="activity-actions">
+        <button class="action-btn" id="btnShowMore">Tampilkan Lebih Banyak</button>
+        <button class="action-btn" id="btnResetView">Segarkan Tampilan</button>
+        <a class="action-btn action-btn-outline" id="btnDownloadCsv" href="#" target="_blank" rel="noopener">Unduh CSV ↗</a>
+      </div>
+    </div>
     <div class="activity-list" id="activityList">
       <div class="empty-state">Menunggu pembacaan sensor.</div>
     </div>
+    <p class="activity-note">
+      Untuk menghapus data secara permanen, lakukan langsung di ThingSpeak
+      (Channel Settings → Clear Channel) — dashboard ini hanya membaca data,
+      demi keamanan tidak bisa menghapus dari sini.
+    </p>
   </div>
 
 </main>
@@ -406,17 +490,17 @@ const THINGSPEAK_CHANNEL_ID = '3448569';
 const THINGSPEAK_READ_KEY   = 'Q0AV1X3EKMMEVRHP';
 const POLL_INTERVAL_MS      = 5000;
 
-const T_WARN = 30, T_DANGER = 34;
-const T_MIN = 20, T_MAX = 45;
+const T_WARN = 23, T_DANGER = 25;
+const T_MIN = 15, T_MAX = 30;
 
-let histTemps = [], histHumis = [];
+let histTemps = [], histHumis = [], histTimes = [];
 let displayedTemp = null;
 
 /* ============================================================
    FETCH
    ============================================================ */
 async function fetchLatest(){
-  const url = `https://api.thingspeak.com/channels/${THINGSPEAK_CHANNEL_ID}/feeds.json?api_key=${THINGSPEAK_READ_KEY}&results=20`;
+  const url = `https://api.thingspeak.com/channels/${THINGSPEAK_CHANNEL_ID}/feeds.json?api_key=${THINGSPEAK_READ_KEY}&results=60`;
   try{
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP '+res.status);
@@ -433,12 +517,13 @@ function processFeeds(json){
   const feeds = (json.feeds || []).filter(f => f.field1 !== null && f.field1 !== undefined);
   if (!feeds.length) return;
 
-  histTemps = []; histHumis = [];
+  histTemps = []; histHumis = []; histTimes = [];
   feeds.forEach(f => {
     const t = parseFloat(f.field1);
     const h = parseFloat(f.field2);
     if (!isNaN(t)) histTemps.push(t);
     if (!isNaN(h)) histHumis.push(h);
+    histTimes.push(f.created_at);
   });
 
   const last = feeds[feeds.length-1];
@@ -450,7 +535,7 @@ function processFeeds(json){
   if (!isNaN(temp)) { updateStatusCard(temp); updateNotifCard(temp); }
 
   updateActivity(feeds);
-  drawChart();
+  drawCharts();
 
   document.getElementById('lastUpdate').textContent =
     'Diperbarui ' + new Date().toLocaleTimeString('id-ID');
@@ -555,6 +640,10 @@ function updateStatusCard(temp){
   document.getElementById('statusValue').textContent = c.valueText;
   document.getElementById('statusDesc').textContent = c.desc;
   document.getElementById('statusUnderline').style.background = c.iconColor;
+
+  const light = document.getElementById('statusLight');
+  light.classList.remove('normal', 'warn', 'danger');
+  light.classList.add(status);
 
   const iconWrap = document.getElementById('statusIconWrap');
   iconWrap.style.background = c.cardBg;
@@ -675,10 +764,16 @@ function smoothLinePath(ctx, pts){
   ctx.lineTo(last.x, last.y);
 }
 
-function drawChart(){
-  const canvas = document.getElementById('histChart');
+// State disimpan per-chart supaya hover tahu titik mana yang terdekat
+const chartState = {
+  temp: { pts: [], values: [], times: [] },
+  humi: { pts: [], values: [], times: [] },
+};
+
+function drawSingleChart(canvasId, data, times, color, minVal, maxVal, unit, stateKey){
+  const canvas = document.getElementById(canvasId);
   const ctx = canvas.getContext('2d');
-  const W = canvas.offsetWidth || 600;
+  const W = canvas.offsetWidth || 500;
   const H = canvas.offsetHeight || 200;
   canvas.width = W * devicePixelRatio;
   canvas.height = H * devicePixelRatio;
@@ -686,71 +781,107 @@ function drawChart(){
   ctx.scale(devicePixelRatio, devicePixelRatio);
   ctx.clearRect(0,0,W,H);
 
-  if (!histTemps.length){
+  if (!data.length){
     ctx.fillStyle = '#98A2B3';
     ctx.font = '13px Archivo';
     ctx.textAlign = 'center';
     ctx.fillText('Menunggu data.', W/2, H/2);
+    chartState[stateKey].pts = [];
     return;
   }
 
-  const padL = 32, padR = 8, padT = 14, padB = 22;
+  const padL = 34, padR = 8, padT = 14, padB = 22;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
-  const toX = i => padL + (i/(Math.max(1,histTemps.length-1))) * plotW;
-  const toTY = t => padT + plotH - ((t - T_MIN)/(T_MAX - T_MIN)) * plotH;
-  const toHY = h => padT + plotH - (h/100) * plotH;
+  const toX = i => padL + (i/(Math.max(1,data.length-1))) * plotW;
+  const toY = v => padT + plotH - ((v - minVal)/(maxVal - minVal)) * plotH;
 
+  // grid + y-axis labels
   ctx.strokeStyle = '#EDEFF2'; ctx.lineWidth = 1;
+  ctx.fillStyle = '#98A2B3'; ctx.font = '10px Archivo'; ctx.textAlign = 'right';
   for (let i=0;i<=3;i++){
     const y = padT + (plotH/3)*i;
     ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
+    const val = maxVal - ((maxVal-minVal)/3)*i;
+    ctx.fillText(Math.round(val), padL-6, y+3);
   }
 
-  // ── Kelembaban: garis halus + titik ──
-  if (histHumis.length > 1){
-    const hPts = histHumis.map((h,i) => ({ x: toX(i), y: toHY(h) }));
-    ctx.beginPath();
-    smoothLinePath(ctx, hPts);
-    ctx.strokeStyle = '#163B7A'; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.stroke();
-    hPts.forEach((p,i) => {
-      ctx.beginPath(); ctx.arc(p.x, p.y, i===hPts.length-1 ? 3.5 : 2, 0, Math.PI*2);
-      ctx.fillStyle = '#163B7A'; ctx.fill();
-    });
-  }
-
-  // ── Suhu: glow + gradient fill + garis halus + titik ──
-  const tPts = histTemps.map((t,i) => ({ x: toX(i), y: toTY(t) }));
+  const pts = data.map((v,i) => ({ x: toX(i), y: toY(v), v, t: times[i] }));
+  chartState[stateKey].pts = pts;
 
   ctx.save();
-  ctx.shadowColor = '#C81E3A'; ctx.shadowBlur = 8;
-  ctx.beginPath(); smoothLinePath(ctx, tPts);
-  ctx.strokeStyle = '#C81E3A'; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.shadowColor = color; ctx.shadowBlur = 8;
+  ctx.beginPath(); smoothLinePath(ctx, pts);
+  ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   ctx.stroke();
   ctx.restore();
 
   ctx.beginPath();
-  smoothLinePath(ctx, tPts);
-  ctx.lineTo(tPts[tPts.length-1].x, H-padB); ctx.lineTo(tPts[0].x, H-padB); ctx.closePath();
+  smoothLinePath(ctx, pts);
+  ctx.lineTo(pts[pts.length-1].x, H-padB); ctx.lineTo(pts[0].x, H-padB); ctx.closePath();
   const grad = ctx.createLinearGradient(0,0,0,H);
-  grad.addColorStop(0, '#C81E3A24'); grad.addColorStop(1, '#C81E3A00');
+  grad.addColorStop(0, color+'26'); grad.addColorStop(1, color+'00');
   ctx.fillStyle = grad; ctx.fill();
 
-  tPts.forEach((p,i) => {
-    const isLast = i === tPts.length-1;
-    ctx.beginPath(); ctx.arc(p.x, p.y, isLast ? 4.5 : 2.5, 0, Math.PI*2);
-    ctx.fillStyle = '#C81E3A'; ctx.fill();
+  pts.forEach((p,i) => {
+    const isLast = i === pts.length-1;
+    ctx.beginPath(); ctx.arc(p.x, p.y, isLast ? 4.5 : 3, 0, Math.PI*2);
+    ctx.fillStyle = color; ctx.fill();
     if (isLast){ ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
   });
 }
 
+function drawCharts(){
+  drawSingleChart('tempChart', histTemps, histTimes, '#C81E3A', T_MIN, T_MAX, '°C', 'temp');
+  drawSingleChart('humiChart', histHumis, histTimes, '#163B7A', 0, 100, '%', 'humi');
+}
+
+/* ── Hover tooltip: cari titik terdekat, tampilkan nilai + waktu ── */
+function setupChartHover(canvasId, tooltipId, stateKey, unit){
+  const canvas = document.getElementById(canvasId);
+  const tooltip = document.getElementById(tooltipId);
+  const wrap = canvas.parentElement;
+
+  function findNearest(mouseX){
+    const pts = chartState[stateKey].pts;
+    if (!pts.length) return null;
+    let nearest = pts[0], minDist = Math.abs(pts[0].x - mouseX);
+    for (const p of pts){
+      const d = Math.abs(p.x - mouseX);
+      if (d < minDist){ minDist = d; nearest = p; }
+    }
+    return nearest;
+  }
+
+  canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const pt = findNearest(mouseX);
+    if (!pt){ tooltip.classList.remove('show'); return; }
+
+    const timeStr = pt.t ? new Date(pt.t).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '';
+    tooltip.innerHTML = `<div>${pt.v.toFixed(1)}${unit}</div><div class="tt-time">${timeStr}</div>`;
+    tooltip.style.left = pt.x + 'px';
+    tooltip.style.top = pt.y + 'px';
+    tooltip.classList.add('show');
+  });
+
+  canvas.addEventListener('mouseleave', () => tooltip.classList.remove('show'));
+}
+
+setupChartHover('tempChart', 'tempTooltip', 'temp', '°C');
+setupChartHover('humiChart', 'humiTooltip', 'humi', '%');
+
 /* ============================================================
    ACTIVITY LIST
    ============================================================ */
+let lastFeeds = [];
+let activityShowCount = 8;
+
 function updateActivity(feeds){
+  lastFeeds = feeds;
   const list = document.getElementById('activityList');
-  const rows = [...feeds].reverse().slice(0, 8);
+  const rows = [...feeds].reverse().slice(0, activityShowCount);
   if (!rows.length){
     list.innerHTML = '<div class="empty-state">Belum ada data.</div>';
     return;
@@ -771,15 +902,35 @@ function updateActivity(feeds){
       <span class="activity-swatch" style="background:${colors[status]}"></span>
     </div>`;
   }).join('');
+
+  const btnMore = document.getElementById('btnShowMore');
+  if (btnMore) btnMore.style.display = feeds.length > activityShowCount ? 'inline-flex' : 'none';
 }
+
+/* ── Toolbar: lihat lebih banyak / segarkan / unduh CSV ── */
+document.getElementById('btnShowMore').addEventListener('click', () => {
+  activityShowCount += 12;
+  updateActivity(lastFeeds);
+});
+
+document.getElementById('btnResetView').addEventListener('click', () => {
+  activityShowCount = 8;
+  document.getElementById('lastUpdate').textContent = 'Menyegarkan…';
+  fetchLatest();
+});
+
+(function setupCsvLink(){
+  const url = `https://api.thingspeak.com/channels/${THINGSPEAK_CHANNEL_ID}/feeds.csv?api_key=${THINGSPEAK_READ_KEY}&results=8000`;
+  document.getElementById('btnDownloadCsv').href = url;
+})();
 
 /* ============================================================
    START
    ============================================================ */
 fetchLatest();
 setInterval(fetchLatest, POLL_INTERVAL_MS);
-window.addEventListener('resize', drawChart);
-drawChart();
+window.addEventListener('resize', drawCharts);
+drawCharts();
 </script>
 </body>
 </html>
