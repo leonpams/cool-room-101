@@ -380,7 +380,7 @@ footer p{font-size:12px;color:var(--ink-faint);font-weight:600}
 
       <div class="featured-meta">
         <span id="metaHumidity">Kelembaban —</span>
-        <span>Ambang batas alarm 25°C</span>
+        <span>Ambang batas alarm 26°C</span>
         <span>Channel ThingSpeak 3448569</span>
       </div>
     </div>
@@ -410,8 +410,7 @@ footer p{font-size:12px;color:var(--ink-faint);font-weight:600}
         <span class="status-light" id="statusLight"></span>
         <span class="metric-value" id="statusValue" style="font-size:22px">Memuat</span>
       </div>
-      <div class="sparkline-wrap"><canvas id="statusSpark"></canvas></div>
-      <div class="metric-desc" id="statusDesc">Menunggu pembacaan sensor.</div>
+      <div class="metric-desc" id="statusDesc" style="margin-top:2px">Menunggu pembacaan sensor.</div>
     </div>
 
     <div class="metric-card reveal" style="animation-delay:.24s">
@@ -461,17 +460,20 @@ footer p{font-size:12px;color:var(--ink-faint);font-weight:600}
       <div class="panel-title">Riwayat Pembacaan</div>
       <div class="activity-actions">
         <button class="action-btn" id="btnShowMore">Tampilkan Lebih Banyak</button>
-        <button class="action-btn" id="btnResetView">Segarkan Tampilan</button>
         <a class="action-btn action-btn-outline" id="btnDownloadCsv" href="#" target="_blank" rel="noopener">Unduh CSV ↗</a>
+        <a class="action-btn action-btn-outline" id="btnManageData" href="#" target="_blank" rel="noopener">Kelola Data di ThingSpeak ↗</a>
       </div>
     </div>
     <div class="activity-list" id="activityList">
       <div class="empty-state">Menunggu pembacaan sensor.</div>
     </div>
     <p class="activity-note">
-      Untuk menghapus data secara permanen, lakukan langsung di ThingSpeak
-      (Channel Settings → Clear Channel) — dashboard ini hanya membaca data,
-      demi keamanan tidak bisa menghapus dari sini.
+      Dashboard ini otomatis memuat data terbaru tiap 15 detik, jadi tidak
+      perlu tombol refresh manual. Untuk menghapus data secara permanen
+      (mis. bersih-bersih setelah commissioning), klik "Kelola Data di
+      ThingSpeak" lalu gunakan Clear Channel di sana — dashboard ini sengaja
+      tidak diberi akses hapus langsung demi keamanan, karena akan diakses
+      banyak orang di beberapa lokasi.
     </p>
   </div>
 
@@ -479,7 +481,7 @@ footer p{font-size:12px;color:var(--ink-faint);font-weight:600}
 
 <footer class="wrap">
   <p>Cool Room 101 · Sensor SHT30</p>
-  <p>Diperbarui otomatis tiap 5 detik</p>
+  <p>Diperbarui otomatis tiap 15 detik</p>
 </footer>
 
 <script>
@@ -488,9 +490,9 @@ footer p{font-size:12px;color:var(--ink-faint);font-weight:600}
    ============================================================ */
 const THINGSPEAK_CHANNEL_ID = '3448569';
 const THINGSPEAK_READ_KEY   = 'Q0AV1X3EKMMEVRHP';
-const POLL_INTERVAL_MS      = 5000;
+const POLL_INTERVAL_MS      = 15000;
 
-const T_WARN = 23, T_DANGER = 25;
+const T_WARN = 24.5, T_DANGER = 26;
 const T_MIN = 15, T_MAX = 30;
 
 let histTemps = [], histHumis = [], histTimes = [];
@@ -648,8 +650,6 @@ function updateStatusCard(temp){
   const iconWrap = document.getElementById('statusIconWrap');
   iconWrap.style.background = c.cardBg;
   iconWrap.querySelector('svg').setAttribute('stroke', c.iconColor);
-
-  drawSparkline('statusSpark', histTemps, c.iconColor, T_MIN, T_MAX);
 }
 
 /* ============================================================
@@ -732,13 +732,29 @@ function drawSparkline(canvasId, data, color, minVal, maxVal){
 /* ============================================================
    NOTIF CARD
    ============================================================ */
+/* Cari waktu transisi ke alert PALING BARU di histori yang sudah dimuat —
+   dipakai buat nunjukkin "jam terkirim" tanpa perlu tahu histori kirim email
+   ESP32 secara langsung (dashboard cuma baca data ThingSpeak). */
+function findLastAlertTime(){
+  for (let i = histTemps.length - 1; i >= 0; i--){
+    const isDanger = histTemps[i] >= T_DANGER;
+    const wasDanger = i > 0 ? histTemps[i-1] >= T_DANGER : false;
+    if (isDanger && !wasDanger){
+      return histTimes[i];
+    }
+  }
+  return null;
+}
+
 function updateNotifCard(temp){
   const state = document.getElementById('notifState');
   const iconWrap = document.getElementById('notifIconWrap');
   if (temp >= T_DANGER){
     state.style.background = 'var(--red-soft)';
     state.style.color = '#8E1B2F';
-    state.textContent = 'Notifikasi terkirim ke tim';
+    const t = findLastAlertTime();
+    const timeStr = t ? new Date(t).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'}) : '--';
+    state.textContent = 'Terkirim ' + timeStr;
     iconWrap.style.background = 'var(--red-soft)';
     iconWrap.querySelector('svg').setAttribute('stroke', '#C81E3A');
   } else {
@@ -907,21 +923,23 @@ function updateActivity(feeds){
   if (btnMore) btnMore.style.display = feeds.length > activityShowCount ? 'inline-flex' : 'none';
 }
 
-/* ── Toolbar: lihat lebih banyak / segarkan / unduh CSV ── */
+/* ── Toolbar: lihat lebih banyak / unduh CSV ── */
 document.getElementById('btnShowMore').addEventListener('click', () => {
   activityShowCount += 12;
   updateActivity(lastFeeds);
 });
 
-document.getElementById('btnResetView').addEventListener('click', () => {
-  activityShowCount = 8;
-  document.getElementById('lastUpdate').textContent = 'Menyegarkan…';
-  fetchLatest();
-});
-
 (function setupCsvLink(){
   const url = `https://api.thingspeak.com/channels/${THINGSPEAK_CHANNEL_ID}/feeds.csv?api_key=${THINGSPEAK_READ_KEY}&results=8000`;
   document.getElementById('btnDownloadCsv').href = url;
+})();
+
+// Link ke halaman channel ThingSpeak — BUKAN aksi hapus otomatis.
+// Menghapus data (Clear Channel) butuh login & User API Key milik akun,
+// sengaja tidak ditanam di sini demi keamanan (lihat catatan di bawah tabel).
+(function setupManageDataLink(){
+  const url = `https://thingspeak.com/channels/${THINGSPEAK_CHANNEL_ID}`;
+  document.getElementById('btnManageData').href = url;
 })();
 
 /* ============================================================
