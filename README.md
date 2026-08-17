@@ -5,12 +5,55 @@ ESP32 + SHT30 -> kirim ke ThingSpeak (MQTT) DAN Supabase (HTTPS) sekaligus, tiap
 
 ## Range operasi
 Didesain untuk **cold room 21–25°C**:
-- **Normal**: di bawah 23°C
-- **Waspada**: 23–25°C
-- **Alert**: di atas 25°C — buzzer nyala, email terkirim, dashboard update instan
+- **Normal**: di bawah 24.5°C
+- **Waspada**: 24.5–26°C
+- **Alert**: 26°C ke atas — buzzer nyala, email terkirim, dashboard update instan
 
 Kalau range ruangan Anda beda, ubah `T_WARN`/`T_DANGER` di `dashboard/index.html` dan
 `TEMP_ON`/`TEMP_OFF` di `esp32_final_stack.ino` — pastikan dua-duanya tetap sinkron.
+
+## Logic fitur dashboard (biar tidak rancu)
+
+**Kartu Notifikasi** — menunjukkan JAM notifikasi terakhir terkirim (dideteksi dari
+titik data pertama yang menyentuh ambang alert di histori yang sudah dimuat),
+BUKAN histori lengkap atau tujuan/penerima — sengaja tanpa info penerima demi privasi.
+
+**Kartu Status Ruangan** — cuma penanda (lampu + teks), sengaja tanpa grafik.
+
+**Tombol "Kelola Data di ThingSpeak"** — link ke halaman channel ThingSpeak Anda
+(perlu login sendiri di sana). Sengaja TIDAK dibuat otomatis menghapus dari
+dashboard — proses hapus channel (Clear Channel) butuh User API Key (kunci
+level akun, bukan cuma satu channel), yang terlalu berbahaya untuk ditanam di
+dashboard publik yang bakal diakses banyak orang di beberapa lokasi.
+
+Tidak ada tombol refresh manual — dashboard sudah otomatis tarik data tiap 15
+detik (persis sama dengan kecepatan data baru dibuat, jadi tidak ada delay
+berarti untuk ditunggu manual).
+
+## Kecepatan data — sekarang dipisah per platform
+
+- **ESP32 → ThingSpeak**: tiap **15 detik** (batas keras paket gratis, tidak bisa lebih cepat)
+- **ESP32 → Supabase**: tiap **1 detik** (Supabase tidak punya batas rate seperti ThingSpeak,
+  jadi bisa jauh lebih detail)
+- **Dashboard → baca ThingSpeak**: tiap 15 detik (sama persis dengan kecepatan data
+  dibuat, supaya tidak ada delay yang membingungkan)
+
+Dashboard tetap menampilkan data dari **ThingSpeak** (15 detik), BUKAN dari Supabase —
+Supabase saat ini berfungsi sebagai penyimpanan cadangan resolusi tinggi untuk analisis
+lebih detail di kemudian hari, bukan sumber tampilan dashboard.
+
+## Kapasitas & kapan perlu dibersihkan
+
+**ThingSpeak** (paket gratis): batas kirim 3 juta pesan/tahun, pemakaian saat ini
+~2,1 juta pesan/tahun — aman, di 70% jatah. Data lama otomatis terhapus kalau total
+tersimpan tembus 10 juta pesan — di kecepatan ini, itu baru terjadi di **~4,75 tahun**.
+
+**Supabase** (paket gratis, 500MB) — karena sekarang kirim **tiap 1 detik** (bukan 15
+detik lagi), kapasitasnya terisi jauh lebih cepat: estimasi **penuh dalam ~1,3–2 bulan**.
+Ini konsekuensi yang sudah disepakati demi dapat data resolusi tinggi. **Wajib** rutin
+bersih-bersih tabel `readings` di Supabase (lewat SQL Editor, hapus baris yang lebih tua
+dari sekian hari) supaya insert tidak mulai gagal begitu 500MB penuh. Cek ukuran real di
+Supabase Dashboard → Database secara berkala untuk pantau seberapa dekat ke batas.
 
 ## Urutan setup
 
@@ -21,9 +64,17 @@ Channel ID, MQTT credentials, Write API Key, dan Read API Key semua sudah terisi
 Kalau tabel `readings` belum pernah dibuat, jalankan `supabase_schema.sql` sekali di SQL Editor
 (aman dijalankan ulang, pakai `if not exists`).
 
+**Wajib untuk kirim 1 detik/data**: jalankan juga `supabase_cleanup_cron.sql` sekali di SQL
+Editor — ini setup pembersihan OTOMATIS terjadwal (pakai `pg_cron`, gratis, sudah tersedia
+di Supabase tanpa upgrade), hapus data lebih tua dari 20 hari tiap hari jam 03:00 UTC. Tanpa
+ini, tabel `readings` akan penuh dalam ~1,3-2 bulan dan insert mulai gagal.
+
 ### 3. ESP32
 1. **Extract dulu (Extract All)** zip ini ke folder biasa sebelum dibuka
-2. Install library **"PubSubClient"** dan **"ESP Mail Client" by Mobizt**
+2. Install library **"PubSubClient"** by Nick O'Leary lewat Library Manager
+   (cuma ini SATU-SATUNYA library tambahan yang dibutuhkan — email sekarang
+   dikirim manual pakai WiFiClientSecure bawaan ESP32, tanpa ESP_Mail_Client,
+   supaya tidak ada lagi risiko bentrok versi library/toolchain)
 3. Buka folder `esp32_final_stack/`, klik `esp32_final_stack.ino` — semua kredensial sudah terisi
 4. Upload, buka Serial Monitor (115200)
 
